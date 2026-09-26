@@ -1,25 +1,22 @@
-# Runs Laya locally so the proxy has a self-hosted reflex model.
+# NOTE: Laya does NOT publish an official Docker image at time of writing.
+# The recommended path is to install Laya as a Python package instead:
 #
-# The Laya repo (github.com/NandhaKishorM/laya) publishes a Docker image;
-# adjust the image tag / entrypoint to match whatever it currently ships.
-# If you'd rather run Laya directly with Python or uv, skip this file and
-# just point LAYA_URL at your local server.
+#     pip install "laya[serve]"
+#     laya-serve                    # binds 0.0.0.0:8000
+#
+# See README.md for the full setup. This file is kept as a placeholder in
+# case a Docker image is published later; adjust `image:` to whatever the
+# Laya project ships and delete this comment.
 
 services:
   laya:
-    image: nandhakishorm/laya:latest
+    # image: nandhakishorm/laya:latest   # <-- unofficial guess, likely wrong
+    build:
+      context: https://github.com/NandhaKishorM/laya.git
     container_name: jarvis-laya
     ports:
       - "8000:8000"
     environment:
-      - LAYA_HOST=0.0.0.0
-      - LAYA_PORT=8000
+      - LAYA_DEVICE=cpu
+      - LAYA_PRELOAD=1
     restart: unless-stopped
-    # Uncomment to give the container a GPU (needs nvidia-container-toolkit).
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]

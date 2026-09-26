@@ -1,22 +1,22 @@
-// Laya client — the "typed reflex" layer. Same primitives JEV exposes
-// (choice / noul), self-hosted via github.com/NandhaKishorM/laya.
+// Laya client — the "typed reflex" layer, self-hosted via
+// github.com/NandhaKishorM/laya.
 //
-// This module keeps the endpoint paths configurable via env so the proxy
-// works with whatever routes your Laya build ships.
+// Laya's real API is ONE combined request per decision cycle: you POST
+// {state, questions} where `questions` is a dict of {name: {type, ...}} and
+// the response answers all of them in a single forward pass. This module
+// exposes that as `systemone(state, questions)`.
 
 import "dotenv/config";
 
 const BASE = process.env.LAYA_URL || "http://localhost:8000";
-const CHOICE_PATH = process.env.LAYA_CHOICE_PATH || "/choice";
-const NOUL_PATH = process.env.LAYA_NOUL_PATH || "/noul";
+const PATH = process.env.LAYA_PATH || "/v1/systemone";
+const API_KEY = process.env.LAYA_API_KEY || "";
 
 async function post(path, body) {
   const url = BASE.replace(/\/+$/, "") + path;
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const headers = { "Content-Type": "application/json" };
+  if (API_KEY) headers.Authorization = `Bearer ${API_KEY}`;
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   if (!r.ok) {
     const t = await r.text().catch(() => "");
     throw new Error(`laya ${path} ${r.status}: ${t.slice(0, 300)}`);
@@ -24,46 +24,58 @@ async function post(path, body) {
   return r.json();
 }
 
-// Normalise the response into { top: {label, p}, all: [{label, p}] }.
-// Handles a few likely shapes: {label, p, distribution}, {choice, probs},
-// or {labels:[...], probs:[...]}.
-function normaliseChoice(res, labels) {
-  if (res && Array.isArray(res.distribution)) {
-    const all = res.distribution.map((x) => ({
-      label: x.label ?? x.name ?? x.id,
+// state: { body: string } — the free-text context Laya reads
+// questions: { name: { type: "choice"|"noul"|"score", instructions: string,
+//                      criteria?: {label: description} | [label,...] } }
+export async function systemone({ state, questions }) {
+  return post(PATH, { state, questions });
+}
+
+// Helpers: pull the answer for a named question out of the response, with
+// tolerance for a few plausible response shapes.
+export function readChoice(response, name) {
+  const a =
+    response?.answers?.[name] ??
+    response?.[name] ??
+    null;
+  if (!a) return { top: { label: null, p: 0 }, all: [] };
+
+  // Distribution shapes we handle:
+  //   {label, p, distribution: [{label, p}, ...]}
+  //   {choice: "x", probs: {label: p, ...}}
+  //   {label, probability}
+  if (Array.isArray(a.distribution)) {
+    const all = a.distribution.map((x) => ({
+      label: x.label ?? x.name,
       p: Number(x.p ?? x.probability ?? x.score ?? 0),
     }));
-    const top = all.reduce((a, b) => (b.p > a.p ? b : a), all[0]);
+    const top = all.reduce((x, y) => (y.p > x.p ? y : x), all[0]);
     return { top, all };
   }
-  if (res && Array.isArray(res.probs) && Array.isArray(res.labels || labels)) {
-    const L = res.labels || labels;
-    const all = L.map((label, i) => ({ label, p: Number(res.probs[i] || 0) }));
-    const top = all.reduce((a, b) => (b.p > a.p ? b : a), all[0]);
+  if (a.probs && typeof a.probs === "object") {
+    const all = Object.entries(a.probs).map(([label, p]) => ({ label, p: Number(p) }));
+    const top = all.reduce((x, y) => (y.p > x.p ? y : x), all[0]);
     return { top, all };
   }
-  if (res && res.label != null) {
-    const all = [{ label: res.label, p: Number(res.p ?? res.probability ?? 1) }];
-    return { top: all[0], all };
+  if (a.label != null) {
+    return { top: { label: a.label, p: Number(a.p ?? a.probability ?? 1) }, all: [{ label: a.label, p: 1 }] };
   }
-  return { top: { label: labels?.[0], p: 0 }, all: [] };
+  if (a.choice != null) {
+    return { top: { label: a.choice, p: Number(a.p ?? 1) }, all: [{ label: a.choice, p: 1 }] };
+  }
+  return { top: { label: null, p: 0 }, all: [] };
 }
 
-function normaliseNoul(res) {
-  if (res == null) return { p: 0 };
-  if (typeof res.p === "number") return { p: res.p };
-  if (typeof res.probability === "number") return { p: res.probability };
-  if (typeof res.yes === "number") return { p: res.yes };
-  if (typeof res === "number") return { p: res };
+export function readNoul(response, name) {
+  const a =
+    response?.answers?.[name] ??
+    response?.[name] ??
+    null;
+  if (!a) return { p: 0 };
+  if (typeof a === "number") return { p: a };
+  if (typeof a.p === "number") return { p: a.p };
+  if (typeof a.probability === "number") return { p: a.probability };
+  if (typeof a.yes === "number") return { p: a.yes };
+  if (typeof a.answer === "boolean") return { p: a.answer ? 1 : 0 };
   return { p: 0 };
-}
-
-export async function choice({ text, labels }) {
-  const res = await post(CHOICE_PATH, { text, labels });
-  return normaliseChoice(res, labels);
-}
-
-export async function noul({ text, question }) {
-  const res = await post(NOUL_PATH, { text, question });
-  return normaliseNoul(res);
 }

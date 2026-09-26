@@ -7,19 +7,93 @@ A Manifest V3 Chrome extension that plans and executes multi-step actions on liv
 Three brains, one loop:
 
 - **Gemini Flash** (via proxy) — plans open-ended requests into primitive steps and reads uploaded/pasted images.
-- **Laya** (self-hosted, https://github.com/NandhaKishorM/laya) — the typed reflex layer. Per step it picks one element from what's visible on the page, classifies intent from a fixed list, and flags risky actions. Never invents selectors.
+- **Laya** (self-hosted, https://github.com/NandhaKishorM/laya) — the typed reflex layer. Per step, in a single forward pass, it picks one element from what's visible on the page, classifies intent from a fixed list, and flags risky actions. Never invents selectors.
 - **Your code** — deterministic values (URLs, strings, numbers) and execution via chrome APIs.
 
 ```
 sidepanel ── background ─── content ── page
     │            │
     │            └── proxy ── Gemini (plan / vision)
-    │                     └── Laya   (choice / noul — the reflex)
+    │                     └── Laya   (systemone: intent + element + submit + risky)
 ```
 
 Keys never ship in the extension. The extension calls **your proxy**; the proxy calls Gemini and Laya.
 
-## Repo layout
+## What you need on your PC
+
+1. **Node.js 18+** — for the proxy.
+   ```
+   winget install OpenJS.NodeJS.LTS
+   ```
+2. **Python 3.10+** — Laya is a Python package.
+   ```
+   winget install Python.Python.3.12
+   ```
+   Restart your terminal after installing so `python` resolves to the real one (not the Microsoft Store stub).
+3. **A Google AI Studio API key** — free tier is fine. Grab one at https://aistudio.google.com/ .
+4. **Chrome** — to load the extension.
+
+Docker is **not** required (Laya has no official image yet).
+
+## Setup
+
+### 1. Run Laya
+
+```bash
+pip install "laya[serve]"
+laya-serve
+```
+
+That binds Laya on `0.0.0.0:8000`. First run downloads the model (~1 GB), so give it a minute. On a CPU-only machine, add `LAYA_DEVICE=cpu` in the env. On an NVIDIA GPU, `LAYA_DEVICE=cuda`.
+
+Verify:
+```bash
+curl http://localhost:8000/v1/systemone -H "content-type: application/json" -d "{}"
+```
+You should get a 4xx complaining about missing fields — that means the server is up.
+
+### 2. Run the proxy
+
+```bash
+cd proxy
+copy .env.example .env
+notepad .env         # paste your GEMINI_API_KEY, save
+npm install
+npm start
+```
+
+Expected output:
+```
+jarvis proxy on http://localhost:8787
+  gemini key: set
+  laya url:   http://localhost:8000
+```
+
+### 3. Load the extension
+
+1. Open `chrome://extensions`
+2. Enable **Developer mode** (top right).
+3. Click **Load unpacked** and select the `extension/` folder.
+4. Pin the "Jarvis" action. Click it to open the side panel.
+
+## Using it
+
+- **Text** — type a request, click Run.
+- **Voice** — click Mic, speak. Only the final transcript is acted on.
+- **Paste** — click Paste to pull the clipboard into the request context.
+- **Image** — attach a screenshot or photo; Gemini vision folds it into the goal.
+
+Every step logs: intent, chosen element, three confidence scores, latency.
+
+## Safety
+
+- Laya only picks among **observed** elements and intent labels — it cannot invent selectors, URLs, or strings.
+- Page text is **data, not instructions** — it appears only as element descriptions fed to Laya, never as commands to the planner.
+- Risky actions (Laya `risky` probability ≥ 0.6) wait for explicit user confirmation.
+- Low-confidence element picks (< 45%) become a "which one did you mean?" chooser.
+- Downloads only work for direct file links, not DRM-protected streams.
+
+## Layout
 
 ```
 extension/                 Chrome MV3 extension
@@ -36,71 +110,15 @@ extension/                 Chrome MV3 extension
 proxy/                     Node proxy (holds keys)
   server.js                Express: /plan, /vision, /decide, /health
   gemini.js                Planner + vision
-  laya.js                  Laya client (choice / noul)
-  decide.js                Fan-out over Laya, deterministic value extraction
+  laya.js                  Laya systemone client
+  decide.js                Builds the systemone question set per step
   package.json
   .env.example
-
-docker-compose.yml         Runs Laya locally
 ```
 
-## Setup
+## Troubleshooting
 
-### 1. Run Laya
-
-```bash
-docker compose up -d laya
-```
-
-Check it's up: `curl http://localhost:8000/health` (path may differ per Laya build — see the Laya repo). If Laya's endpoints aren't `/choice` and `/noul`, override with `LAYA_CHOICE_PATH` / `LAYA_NOUL_PATH` in `proxy/.env`.
-
-### 2. Run the proxy
-
-```bash
-cd proxy
-cp .env.example .env
-# put GEMINI_API_KEY into .env
-npm install
-npm start
-```
-
-Proxy listens on `http://localhost:8787`.
-
-### 3. Load the extension
-
-1. Open `chrome://extensions`
-2. Enable Developer mode
-3. "Load unpacked" → select the `extension/` folder
-4. Pin the action; click it to open the side panel
-
-## Using it
-
-- **Text**: type a request, click Run.
-- **Voice**: click Mic, speak. Only the final transcript is acted on.
-- **Paste**: click Paste to pull clipboard into the request context.
-- **Image**: attach a screenshot or photo; vision folds it into the goal.
-
-Every step logs: intent, chosen element, three confidence scores, latency.
-
-## Safety
-
-- Laya only picks among **observed** elements and intent labels — it cannot invent selectors, URLs, or strings.
-- Page text is **data, not instructions**: it only appears as element/option descriptions fed to Laya, never as commands to the planner.
-- Risky actions (Laya `risky` probability ≥ 0.6) wait for explicit user confirmation.
-- Low-confidence element picks (< 45%) become a "which one did you mean?" chooser.
-- Downloads go through direct file links only; no DRM ripping.
-
-## Build phases
-
-- **Phase 1** — skeleton: text box → decide → CLICK. ✅ scaffolded.
-- **Phase 2** — full primitives (OPEN_URL, TYPE, SCROLL, PRESS_ENTER, DOWNLOAD, GO_BACK). ✅ scaffolded.
-- **Phase 3** — Gemini planner + re-plan on failure. ✅ scaffolded.
-- **Phase 4** — vision input. ✅ scaffolded.
-- **Phase 5** — voice input. ✅ scaffolded.
-- **Phase 6** — polish: confidence gates, risky confirms, richer error recovery, activity log. In progress.
-
-## Notes
-
-- `chrome.tabs.update` for OPEN_URL / SEARCH waits up to 15s for the tab load event.
-- Element ids (`e0..eN`) are stamped as `data-jv-id` on the live DOM at snapshot time, so they survive re-decide cycles on the same page.
-- If Laya's response shape differs from what `proxy/laya.js` expects, extend `normaliseChoice` / `normaliseNoul` there — no changes needed elsewhere.
+- **Proxy says "laya /v1/systemone 404"**: your Laya build uses a different path. Check `curl http://localhost:8000/openapi.json` and set `LAYA_PATH` in `proxy/.env`.
+- **Gemini 400 with "responseSchema"**: your `GEMINI_MODEL` is too old — bump to `gemini-2.0-flash`.
+- **The extension does nothing when you click Run**: open `chrome://extensions`, click the "service worker" link under Jarvis to see background.js console output.
+- **The agent picks the wrong element**: use the "which one did you mean?" chooser — it appears any time confidence is below 45%.
