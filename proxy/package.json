@@ -1,0 +1,20 @@
+{
+  "name": "jarvis-proxy",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Proxy for Jarvis for Browser: routes /plan and /vision to Gemini and /decide to Laya.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
